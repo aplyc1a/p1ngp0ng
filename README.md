@@ -13,8 +13,10 @@ p0ng，实现被控端反向连接C2服务器。待开发。
                 
 # 使用                
 **p1ng：**                
-p1ng -S -c ${client_ip}                
-p1ng -C                
+
+c2服务端：p1ng -S -c ${client_ip}                
+c2被控端：echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all                
+&nbsp;&nbsp;&nbsp;&nbsp;p1ng -C                
 ![main-panel](https://github.com/aplyc1a/p1ngp0ng/blob/master/logo.png)                
 ![p1ng-simple-usage](https://github.com/aplyc1a/p1ngp0ng/blob/master/p1ng_usage.png)                
                 

