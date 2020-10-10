@@ -15,6 +15,8 @@ p0ng，实现被控端反向连接C2服务器。待开发。
 **p1ng：**                
 p1ng -S -c ${client_ip}                
 p1ng -C                
+![main-panel](https://github.com/aplyc1a/p1ngp0ng/blob/master/logo.png)                
+![p1ng-simple-usage](https://github.com/aplyc1a/p1ngp0ng/blob/master/p1ng_usage.png)                
                 
 **p0ng：**                
 待开发                
