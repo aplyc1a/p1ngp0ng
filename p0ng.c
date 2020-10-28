@@ -201,7 +201,7 @@ void check_server(uint8_t seq_num){
     uint8_t icmp_data_prefix[8]={0};
     uint8_t icmp_data_len=0;
     uint8_t count=0;
-    uint16_t length=0;
+    int32_t length=0;
     struct timeval timeval_old;
     
     while(count<3){//一般来说data域前三字节不为空
@@ -245,7 +245,7 @@ void show_execute_result(uint8_t *recvd_packet,uint8_t recvd_len){
     struct ip *ip;
     struct timeval timeval_old;
     struct timeval timeval_new={30,0};
-    uint16_t length=0;
+    int32_t length=0;
     
     memcpy(recvpacket,recvd_packet,recvd_len);    
     ip = (struct ip *) recvpacket;
@@ -277,7 +277,7 @@ void show_upload_result(uint8_t *recvd_packet,uint8_t recvd_len){
     struct ip *ip;
     struct timeval timeval_old;
     struct timeval timeval_new={30,0};
-    uint16_t length=0;
+    int32_t length=0;
     uint8_t filename[50];
     
     time_t t;
@@ -393,7 +393,7 @@ uint8_t currentwork_requester(uint8_t seq_num){
     uint8_t icmp_data_prefix[8]={0};
     uint8_t icmp_data_len=0;
     uint8_t count=0;
-    uint16_t length=0;
+    int32_t length=0;
     struct timeval timeval_old;
     
     while(count<3){//一般来说data域前三字节不为空
@@ -656,7 +656,7 @@ void p0ng_client(char *server_ip){
     }
 }
 
-void p0ng_server(){
+void *p0ng_server(){
     struct protoent *protocol;
     uint8_t iphdr_len = 0;
     uint8_t icmptotal_len = 0;
@@ -692,7 +692,7 @@ void p0ng_server(){
         icmptotal_len = pkt_size - iphdr_len;
         if( icmptotal_len < 8){
             printf("\033[40;31m[-]\033[0mMalformed Message!\n");
-            return;
+            continue;
         }
         else
             pkt_type=recvpacket[iphdr_len+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE];
